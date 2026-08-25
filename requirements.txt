@@ -1,0 +1,7 @@
+streamlit>=1.35
+requests>=2.31
+quickjs>=1.19
+pandas>=2.0
+janome>=0.5
+wordcloud>=1.9
+openpyxl>=3.1
