@@ -19,18 +19,19 @@ from scraper import ScrapeError
 
 FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "ipaexg.ttf")
 
-# 合言葉。Streamlit Cloudの Settings > Secrets に access_code = "任意の数字" を
-# 登録すればそちらが優先される（リポジトリを公開する場合は必ずSecretsを使う）。
-DEFAULT_ACCESS_CODE = "830517"
+# 実際の合言葉は Streamlit Secrets の access_code に置く（Settings > Secrets）。
+# 下の値はSecretsを設定できないローカル開発用のダミーで、本番では使われない。
+LOCAL_DEV_ACCESS_CODE = "000000"
 
 st.set_page_config(page_title="ココナラ競合分析ツール", page_icon="🔎", layout="wide")
 
 
-def _access_code() -> str:
+def _access_code() -> tuple[str, bool]:
+    """(合言葉, Secretsから読めたか) を返す。"""
     try:
-        return str(st.secrets["access_code"])
+        return str(st.secrets["access_code"]), True
     except Exception:
-        return DEFAULT_ACCESS_CODE
+        return LOCAL_DEV_ACCESS_CODE, False
 
 
 def require_access_code() -> None:
@@ -38,17 +39,24 @@ def require_access_code() -> None:
     if st.session_state.get("authorized"):
         return
 
+    expected, from_secrets = _access_code()
+
     st.title("🔒 ココナラ競合分析ツール")
     st.write("ご利用には合言葉（数字）が必要です。")
     with st.form("access"):
         code = st.text_input("合言葉", type="password", placeholder="数字を入力")
         submitted = st.form_submit_button("開く", type="primary")
     if submitted:
-        if code.strip() == _access_code():
+        if code.strip() == expected:
             st.session_state["authorized"] = True
             st.rerun()
         else:
             st.error("合言葉が違います。")
+    if not from_secrets:
+        st.warning(
+            "合言葉が未設定です（開発用のダミーで動作しています）。"
+            "公開して使う場合は Settings > Secrets に access_code を登録してください。"
+        )
     st.stop()
 
 
