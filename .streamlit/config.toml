@@ -1,0 +1,8 @@
+# 共有先の閲覧者に、Streamlitの開発者向けUI（Deploy・Manage app・
+# Rerun・ソース表示などのメニュー）を見せないための設定。
+[client]
+toolbarMode = "minimal"
+
+[browser]
+# 利用状況の外部送信を無効化
+gatherUsageStats = false
