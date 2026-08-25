@@ -146,13 +146,14 @@ def _row_from_search_item(item: dict) -> dict:
         "出品者": p.get("name", ""),
         "出品者ランク": p.get("level"),
         "PRO認定": bool(p.get("proFlag")),
-        "URL": f"{BASE_URL}/services/{service_id}" if service_id else "",
+        "サービスURL": f"{BASE_URL}/services/{service_id}" if service_id else "",
         "画像URL": (
             f"https://service-cdn.coconala.com/crop/460/380{image_path}"
             if image_path
             else ""
         ),
-        "冒頭文": s.get("head", ""),
+        # 検索結果の head は途中で打ち切られている。全文は詳細ページ側で上書きする。
+        "サービス内容": s.get("head", ""),
     }
 
 
@@ -208,21 +209,23 @@ def get_service_detail(service_id: int, session: requests.Session | None = None)
         raise ScrapeError(f"サービス詳細の取得に失敗しました (ID: {service_id})") from e
 
     options = "\n".join(
-        f"{o.get('title', o.get('name', ''))} +{o.get('price', '')}円"
+        f"{o.get('title', '')} +{o.get('priceWot', '')}円"
         for o in (d.get("optionsList") or [])
     )
-    faqs = "\n".join(
+    # Q と A を改行で分け、1問1答のセットごとに空行を挟む
+    faqs = "\n\n".join(
         f"Q. {f.get('question', '')}\nA. {f.get('answer', '')}"
         for f in (d.get("faqsList") or [])
     )
     return {
         "サービスID": d.get("id"),
         "お気に入り数": d.get("favCount"),
-        "本文": d.get("body", ""),
+        # 詳細ページの head は省略のない全文
+        "サービス内容": d.get("head", ""),
+        "購入にあたってのお願い": d.get("body", ""),
         "お届け日数": d.get("deliveryTime", ""),
         "オプション": options,
         "よくある質問": faqs,
-        "掲載開始日": d.get("openedDate", ""),
     }
 
 

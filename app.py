@@ -9,6 +9,7 @@
 import io
 import os
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -18,7 +19,40 @@ from scraper import ScrapeError
 
 FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "ipaexg.ttf")
 
+# 合言葉。Streamlit Cloudの Settings > Secrets に access_code = "任意の数字" を
+# 登録すればそちらが優先される（リポジトリを公開する場合は必ずSecretsを使う）。
+DEFAULT_ACCESS_CODE = "830517"
+
 st.set_page_config(page_title="ココナラ競合分析ツール", page_icon="🔎", layout="wide")
+
+
+def _access_code() -> str:
+    try:
+        return str(st.secrets["access_code"])
+    except Exception:
+        return DEFAULT_ACCESS_CODE
+
+
+def require_access_code() -> None:
+    """合言葉を入力するまで、以降の画面を表示しない。"""
+    if st.session_state.get("authorized"):
+        return
+
+    st.title("🔒 ココナラ競合分析ツール")
+    st.write("ご利用には合言葉（数字）が必要です。")
+    with st.form("access"):
+        code = st.text_input("合言葉", type="password", placeholder="数字を入力")
+        submitted = st.form_submit_button("開く", type="primary")
+    if submitted:
+        if code.strip() == _access_code():
+            st.session_state["authorized"] = True
+            st.rerun()
+        else:
+            st.error("合言葉が違います。")
+    st.stop()
+
+
+require_access_code()
 
 st.title("🔎 ココナラ競合分析＋テキストマイニング")
 st.caption(
@@ -83,12 +117,17 @@ with st.sidebar:
 
     st.divider()
     with_details = st.checkbox(
-        "詳細ページも取得する（お気に入り数・本文など）", value=False,
-        help="1件ずつアクセスするため時間がかかります（1件あたり約1〜2秒）",
+        "詳細ページも取得する（推奨）", value=True,
+        help=(
+            "サービス内容の全文・お気に入り数・オプション・よくある質問を取得します。"
+            "検索結果だけでは、サービス内容は冒頭100文字ほどで打ち切られます。"
+            "1件ずつアクセスするため1件あたり約1秒かかります。"
+        ),
     )
-    detail_limit = 30
+    detail_limit = 60
     if with_details:
-        detail_limit = st.slider("詳細を取得する件数（上位から）", 10, 120, 30, step=10)
+        detail_limit = st.slider("詳細を取得する件数（上位から）", 10, 300, 60, step=10)
+        st.caption(f"詳細取得の目安時間：約 {detail_limit} 秒")
 
     run = st.button("🚀 分析を実行", type="primary", use_container_width=True)
 
@@ -129,6 +168,8 @@ if run:
         "total": total,
         "label": category_label,
         "sort": sort_name,
+        "with_details": with_details,
+        "detail_limit": detail_limit if with_details else 0,
     }
 
 # ---------------------------------------------------------------------------
@@ -141,6 +182,13 @@ if "result" not in st.session_state:
 
 result = st.session_state["result"]
 df = pd.DataFrame(result["rows"])
+
+# サービスIDはサービスURLと重複するため表示・出力からは外す（内部の取得処理でのみ使用）
+df = df.drop(columns=["サービスID"], errors="ignore")
+
+# 詳細を取得していない行のサービス内容は冒頭のみ。列名でそれが分かるようにする
+if not result.get("with_details"):
+    df = df.rename(columns={"サービス内容": "サービス内容（冒頭のみ）"})
 
 st.success(
     f"「{result['label']}」（{result['sort']}）：全 {result['total']:,} 件中 "
@@ -163,7 +211,10 @@ tab_data, tab_mining, tab_price, tab_dl = st.tabs(
 # ---- データ一覧 ----
 with tab_data:
     # サムネイルを見やすいよう画像列を先頭付近に配置し、行の高さを確保する
-    front_cols = ["画像URL", "タイトル", "キャッチコピー", "価格", "販売実績", "評価"]
+    front_cols = [
+        "画像URL", "タイトル", "キャッチコピー", "価格", "販売実績",
+        "評価", "評価件数", "お気に入り数", "出品者", "サービスURL",
+    ]
     col_order = [c for c in front_cols if c in df.columns] + [
         c for c in df.columns if c not in front_cols
     ]
@@ -173,26 +224,47 @@ with tab_data:
         height=600,
         row_height=76,
         column_config={
-            "URL": st.column_config.LinkColumn("URL"),
+            "サービスURL": st.column_config.LinkColumn("サービスURL", display_text="開く"),
             "画像URL": st.column_config.ImageColumn("サムネイル", width="medium"),
+            "サービス内容": st.column_config.TextColumn("サービス内容", width="large"),
+            "購入にあたってのお願い": st.column_config.TextColumn(
+                "購入にあたってのお願い", width="large"
+            ),
+            "よくある質問": st.column_config.TextColumn("よくある質問", width="large"),
         },
     )
-    st.caption("サムネイルをクリックすると拡大表示できます。")
+    st.caption(
+        "サムネイルはクリックで拡大表示できます。"
+        "長い文章のセルはクリックすると全文が読めます（CSV/Excelには全文が入ります）。"
+    )
+    if not result.get("with_details"):
+        st.info(
+            "サービス内容は冒頭のみです。全文と、お気に入り数・オプション・よくある質問を"
+            "取得するには、サイドバーの「詳細ページも取得する」を有効にして再実行してください。"
+        )
+    elif result.get("detail_limit", 0) < len(df):
+        st.info(
+            f"詳細情報は上位 {result['detail_limit']} 件のみ取得しています"
+            f"（全 {len(df)} 件）。件数はサイドバーで変更できます。"
+        )
 
 # ---- テキストマイニング ----
 with tab_mining:
     text_source = st.radio(
         "分析対象テキスト",
-        ["タイトル＋キャッチコピー", "タイトルのみ", "本文（詳細取得時のみ）"],
+        ["タイトル＋キャッチコピー", "タイトルのみ", "サービス内容"],
         horizontal=True,
     )
     if text_source == "タイトルのみ":
         texts = df["タイトル"].fillna("").tolist()
-    elif text_source == "本文（詳細取得時のみ）":
-        if "本文" not in df.columns:
-            st.warning("本文を分析するには「詳細ページも取得する」を有効にして再実行してください。")
+    elif text_source == "サービス内容":
+        if "サービス内容" not in df.columns:
+            st.warning(
+                "サービス内容の全文を分析するには、サイドバーの「詳細ページも取得する」を"
+                "有効にして再実行してください。"
+            )
             st.stop()
-        texts = df["本文"].fillna("").tolist()
+        texts = df["サービス内容"].fillna("").tolist()
     else:
         texts = (df["タイトル"].fillna("") + " " + df["キャッチコピー"].fillna("")).tolist()
 
@@ -237,24 +309,99 @@ with tab_mining:
         )
 
 # ---- 価格・実績分析 ----
-with tab_price:
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("価格帯の分布")
-        if price.notna().any():
-            bins = [0, 1000, 3000, 5000, 10000, 30000, 50000, 100000, float("inf")]
-            labels = ["〜1千", "1〜3千", "3〜5千", "5千〜1万", "1〜3万", "3〜5万", "5〜10万", "10万〜"]
-            dist = pd.cut(price, bins=bins, labels=labels).value_counts().reindex(labels)
-            st.bar_chart(dist)
-    with col_b:
-        st.subheader("販売実績 TOP10")
-        top_sold = df.nlargest(10, "販売実績")[["タイトル", "価格", "販売実績", "評価", "出品者"]]
-        st.dataframe(top_sold, use_container_width=True, hide_index=True)
+PRICE_BINS = [0, 1000, 3000, 5000, 10000, 30000, 50000, 100000, float("inf")]
+PRICE_LABELS = [
+    "〜1千円", "1〜3千円", "3〜5千円", "5千〜1万円",
+    "1〜3万円", "3〜5万円", "5〜10万円", "10万円〜",
+]
 
-    st.subheader("価格 × 販売実績")
-    chart_df = df[["価格", "販売実績", "タイトル"]].dropna()
-    if not chart_df.empty:
-        st.scatter_chart(chart_df, x="価格", y="販売実績")
+
+def _band_chart(source: pd.DataFrame, value_col: str, y_title: str, color: str):
+    """価格帯を横軸にした棒グラフ（縦軸は必ず0から始める）。"""
+    base = alt.Chart(source).encode(
+        x=alt.X(
+            "価格帯:N",
+            sort=PRICE_LABELS,
+            axis=alt.Axis(labelAngle=0, title="価格帯", labelFontSize=11),
+        )
+    )
+    bars = base.mark_bar(color=color, cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+        y=alt.Y(
+            f"{value_col}:Q",
+            title=y_title,
+            scale=alt.Scale(domainMin=0, nice=True),
+            axis=alt.Axis(tickMinStep=1),
+        ),
+        tooltip=[
+            alt.Tooltip("価格帯:N"),
+            alt.Tooltip("出品数:Q", title="出品数（件）"),
+            alt.Tooltip("平均販売実績:Q", title="平均販売実績（件）", format=".1f"),
+        ],
+    )
+    labels = base.mark_text(dy=-9, fontSize=11, color="#888").encode(
+        y=alt.Y(f"{value_col}:Q"),
+        text=alt.Text(f"{value_col}:Q", format=",.0f"),
+    )
+    return (bars + labels).properties(height=260)
+
+
+with tab_price:
+    if not price.notna().any():
+        st.warning("価格データが取得できませんでした。")
+    else:
+        band = pd.cut(price, bins=PRICE_BINS, labels=PRICE_LABELS)
+        agg = (
+            pd.DataFrame({"価格帯": band, "販売実績": sold})
+            .groupby("価格帯", observed=False)
+            .agg(出品数=("販売実績", "size"), 平均販売実績=("販売実績", "mean"))
+            .reindex(PRICE_LABELS)
+            .fillna(0)
+            .reset_index()
+        )
+        agg["平均販売実績"] = agg["平均販売実績"].round(1)
+
+        st.subheader("① どの価格帯に競合が集中しているか")
+        st.caption("価格帯ごとの出品数。棒が高いほどライバルが多い価格帯です。")
+        st.altair_chart(
+            _band_chart(agg, "出品数", "出品数（件）", "#4C78A8"),
+            use_container_width=True,
+        )
+
+        st.subheader("② どの価格帯が売れているか")
+        st.caption(
+            "価格帯ごとの平均販売実績。①で出品数が少ないのに②で棒が高い価格帯は、"
+            "ライバルが少ないのに売れている＝狙い目の価格帯です。"
+        )
+        st.altair_chart(
+            _band_chart(agg, "平均販売実績", "平均販売実績（件）", "#54A24B"),
+            use_container_width=True,
+        )
+
+        st.subheader("価格帯ごとのまとめ")
+        summary = agg.copy()
+        summary["出品数"] = summary["出品数"].astype(int)
+        summary["構成比"] = (
+            summary["出品数"] / max(summary["出品数"].sum(), 1) * 100
+        ).round(1).astype(str) + "%"
+        st.dataframe(
+            summary[["価格帯", "出品数", "構成比", "平均販売実績"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.divider()
+    st.subheader("販売実績 TOP10")
+    st.caption("このジャンルで最も売れている出品。価格設定と訴求の参考にしてください。")
+    top_cols = [c for c in ["タイトル", "価格", "販売実績", "評価", "出品者", "サービスURL"] if c in df.columns]
+    top_sold = df.nlargest(10, "販売実績")[top_cols]
+    st.dataframe(
+        top_sold,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "サービスURL": st.column_config.LinkColumn("サービスURL", display_text="開く"),
+        },
+    )
 
 # ---- ダウンロード ----
 with tab_dl:
