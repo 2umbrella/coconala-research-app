@@ -1,3 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
+
+# 合言葉などの秘密情報。絶対にコミットしないこと
+.streamlit/secrets.toml
